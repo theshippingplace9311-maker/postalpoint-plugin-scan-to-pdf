@@ -1,0 +1,13 @@
+{
+  "name": "scan-to-pdf",
+  "main": "plugin.js",
+  "description": "Combine scanner output and phone photos into organized PDFs. Tied to customer records with document type tagging and searchable history.",
+  "version": "1.0.0",
+  "author": "admin01 - ",
+  "homepage": "https://example.com",
+  "postalpoint": {
+    "pluginname": "Scan to PDF",
+    "minVersion": "000034",
+    "maxVersion": "001000"
+  }
+}
