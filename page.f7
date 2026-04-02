@@ -2,7 +2,7 @@
     <div class="page">
         <div class="navbar">
             <div class="navbar-bg"></div>
-            <div class="navbar-inner">
+            <div class="navbar-inner sliding">
                 <div class="left">
                     <a href="#" class="link back">
                         <i class="icon icon-back"></i>
@@ -14,25 +14,24 @@
         </div>
         <div class="page-content">
 
-            <!-- Customer + Doc metadata -->
             <div class="block-title">Document Info</div>
-            <div class="list no-hairlines-md">
+            <div class="list no-hairlines-md inset">
                 <ul>
                     <li class="item-content item-input">
                         <div class="item-inner">
                             <div class="item-title item-label">Customer name</div>
                             <div class="item-input-wrap">
-                                <input type="text" value="${customerName}" @input=${(e) => updateCustomer(e.target.value)} placeholder="Optional" />
+                                <input type="text" id="customerNameInput" placeholder="Optional" />
                             </div>
                         </div>
                     </li>
                     <li>
-                        <a href="#" class="item-link smart-select" @click=${openDocTypePicker}>
-                            <select name="doctype" value="${docType}">
-                                <option value="id">ID / Driver's License</option>
+                        <a href="#" class="item-link smart-select smart-select-init">
+                            <select id="docTypeSelect" name="doctype">
+                                <option value="id" selected>ID / Driver's License</option>
                                 <option value="passport">Passport</option>
-                                <option value="contract">Contract / Signed Doc</option>
-                                <option value="insurance">Insurance Doc</option>
+                                <option value="contract">Contract / Signed Document</option>
+                                <option value="insurance">Insurance Document</option>
                                 <option value="utility">Utility Bill</option>
                                 <option value="form_1583">Form 1583 (CMRA)</option>
                                 <option value="tax">Tax Document</option>
@@ -41,7 +40,6 @@
                             <div class="item-content">
                                 <div class="item-inner">
                                     <div class="item-title">Document type</div>
-                                    <div class="item-after">${docType}</div>
                                 </div>
                             </div>
                         </a>
@@ -50,29 +48,32 @@
                         <div class="item-inner">
                             <div class="item-title item-label">Notes</div>
                             <div class="item-input-wrap">
-                                <input type="text" value="${notes}" @input=${(e) => setNotes(e.target.value)} placeholder="Optional notes" />
+                                <input type="text" id="notesInput" placeholder="Optional" />
                             </div>
                         </div>
                     </li>
                 </ul>
             </div>
 
-            <!-- Scanner selection -->
             <div class="block-title">Scanner</div>
-            <div class="block block-strong">
+            <div class="block block-strong inset">
                 ${scanners.length === 0 ? $h`
-                    <p class="text-color-gray">No scanners discovered yet.</p>
+                    <p>No scanners detected yet.</p>
                     <a class="button button-fill" @click=${discoverScanners}>Find Scanners on Network</a>
                 ` : $h`
-                    <div class="list media-list">
+                    <div class="list media-list no-margin-top">
                         <ul>
                             ${scanners.map((s, i) => $h`
                                 <li>
-                                    <a class="item-link ${selectedScanner === i ? 'bg-color-blue text-color-white' : ''}" @click=${() => selectScanner(i)}>
+                                    <a class="item-link" @click=${() => selectScanner(i)}>
                                         <div class="item-content">
+                                            <div class="item-media">
+                                                <i class="icon fa-solid fa-print ${selectedScanner === i ? 'text-color-blue' : 'text-color-gray'}"></i>
+                                            </div>
                                             <div class="item-inner">
                                                 <div class="item-title-row">
-                                                    <div class="item-title">${s.name}</div>
+                                                    <div class="item-title"><b>${s.name || s.host}</b></div>
+                                                    ${selectedScanner === i ? $h`<div class="item-after"><i class="icon fa-solid fa-check text-color-green"></i></div>` : ''}
                                                 </div>
                                                 <div class="item-subtitle">${s.note || s.host}</div>
                                                 <div class="item-text">
@@ -85,47 +86,43 @@
                             `)}
                         </ul>
                     </div>
-                    <a class="button button-outline" @click=${discoverScanners}>Refresh Scanner List</a>
+                    <a class="button button-outline margin-top" @click=${discoverScanners}>Refresh Scanner List</a>
                 `}
             </div>
 
-            <!-- Scan + upload actions -->
             <div class="block-title">Capture</div>
-            <div class="block block-strong">
+            <div class="block block-strong inset">
                 <div class="row">
                     <div class="col-50">
-                        <a class="button button-fill button-large ${scanners.length === 0 || selectedScanner === null ? 'disabled' : ''}"
+                        <a class="button button-fill button-large color-blue ${selectedScanner === null ? 'disabled' : ''}"
                            @click=${scanDocument}>
-                            <i class="icon fa-solid fa-scanner"></i> Scan Page
+                            <i class="icon fa-solid fa-scanner margin-right"></i> Scan Page
                         </a>
                     </div>
                     <div class="col-50">
                         <a class="button button-outline button-large" @click=${uploadImage}>
-                            <i class="icon fa-solid fa-upload"></i> Upload Image
+                            <i class="icon fa-solid fa-upload margin-right"></i> Upload File
                         </a>
                     </div>
                 </div>
-                <p class="text-color-gray" style="font-size: 0.85em; margin-top: 8px;">
-                    Scan from an eSCL-compatible network scanner, or upload images from disk (phone photos, existing scans).
+                <p class="text-color-gray margin-top" style="font-size: 0.85em;">
+                    Scan from a network scanner, or upload phone photos / existing files.
                 </p>
             </div>
 
-            <!-- Pages preview -->
             ${pages.length > 0 ? $h`
                 <div class="block-title">Pages (${pages.length})</div>
-                <div class="block block-strong">
+                <div class="block block-strong inset">
                     <div class="row">
                         ${pages.map((p, i) => $h`
-                            <div class="col-25" style="margin-bottom: 8px;">
-                                <div style="position: relative; border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: #f5f5f5;">
-                                    <img src="${p.preview}" style="width: 100%; height: 120px; object-fit: cover;" />
-                                    <div style="position: absolute; top: 4px; left: 4px; background: rgba(255,255,255,0.9); padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: bold;">
-                                        #${i + 1}
-                                    </div>
-                                    <a href="#" @click=${() => removePage(i)} style="position: absolute; top: 4px; right: 4px; background: #e53935; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; text-decoration: none;">×</a>
-                                    <div style="display: flex; padding: 4px; gap: 4px;">
-                                        ${i > 0 ? $h`<a class="button button-small button-outline" @click=${() => movePage(i, i-1)}>←</a>` : ''}
-                                        ${i < pages.length - 1 ? $h`<a class="button button-small button-outline" @click=${() => movePage(i, i+1)}>→</a>` : ''}
+                            <div class="col-25">
+                                <div class="scan-page-card">
+                                    <img src="${p.preview}" class="scan-page-thumb" />
+                                    <div class="scan-page-num">#${i + 1}</div>
+                                    <a class="scan-page-remove" @click=${() => removePage(i)}>×</a>
+                                    <div class="scan-page-controls">
+                                        ${i > 0 ? $h`<a class="button button-small" @click=${() => movePage(i, i-1)}>←</a>` : $h`<span></span>`}
+                                        ${i < pages.length - 1 ? $h`<a class="button button-small" @click=${() => movePage(i, i+1)}>→</a>` : $h`<span></span>`}
                                     </div>
                                 </div>
                             </div>
@@ -133,8 +130,7 @@
                     </div>
                 </div>
 
-                <!-- Save/print actions -->
-                <div class="block">
+                <div class="block inset">
                     <div class="row">
                         <div class="col-50">
                             <a class="button button-outline button-large" @click=${clearAll}>
@@ -143,74 +139,119 @@
                         </div>
                         <div class="col-50">
                             <a class="button button-fill button-large color-green" @click=${savePDF}>
-                                <i class="icon fa-solid fa-floppy-disk"></i> Save PDF
+                                <i class="icon fa-solid fa-floppy-disk margin-right"></i> Save PDF
                             </a>
                         </div>
                     </div>
                 </div>
             ` : ''}
 
-            <!-- Footer credit -->
-            <div class="block text-align-center text-color-gray" style="font-size: 0.8em; margin-top: 32px; padding: 16px 0;">
-                Scan to PDF plugin · Built by admin01 · <br/>
-                <a href="#" @click=${openCreditLink} class="external">example.com</a>
+            <div class="block text-align-center text-color-gray" style="font-size: 0.8em; padding: 24px 0 8px;">
+                Scan to PDF · Built by admin01 · <br/>
+                <a href="#" @click=${openCreditLink}>example.com</a>
             </div>
         </div>
     </div>
 </template>
 
+<style>
+    .scan-page-card {
+        position: relative;
+        border: 1px solid var(--f7-md-outline-variant);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--f7-block-strong-bg-color);
+        margin-bottom: 8px;
+    }
+    .scan-page-thumb {
+        width: 100%;
+        height: 120px;
+        object-fit: cover;
+        display: block;
+    }
+    .scan-page-num {
+        position: absolute;
+        top: 4px;
+        left: 4px;
+        background: rgba(255,255,255,0.9);
+        color: #000;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: bold;
+    }
+    .scan-page-remove {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        background: #e53935;
+        color: white;
+        border-radius: 50%;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        font-size: 18px;
+        font-weight: bold;
+        cursor: pointer;
+    }
+    .scan-page-controls {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px;
+        gap: 4px;
+    }
+    .scan-page-controls .button {
+        flex: 1;
+    }
+</style>
+
 <script>
     export default (props, { $f7, $on, $update }) => {
-        // State
-        let scanners = [];
-        let selectedScanner = null;
-        let pages = []; // [{ preview: dataUrl, blob: Blob, source: 'scan' | 'upload' }]
-        let customerName = '';
-        let docType = 'other';
-        let notes = '';
+        const plugin = require(global.apis.getPluginFolder("app.scantopdf") + "/plugin.js");
 
-        // Load saved settings
-        const defaultDpi = parseInt(global.apis.settings.get("app.postalpoint.scan-to-pdf_default_dpi") || "300");
-        const defaultColor = global.apis.settings.get("app.postalpoint.scan-to-pdf_default_color") || "RGB24";
+        var scanners = [];
+        var selectedScanner = null;
+        var pages = [];
 
-        const updateCustomer = (v) => { customerName = v; $update(); };
-        const setNotes = (v) => { notes = v; $update(); };
-
-        const openDocTypePicker = (e) => {
-            // Framework7 smart-select handles this - we just read the value after
-            setTimeout(() => {
-                const el = document.querySelector('select[name="doctype"]');
-                if (el) { docType = el.value; $update(); }
-            }, 300);
-        };
-
-        const discoverScanners = async () => {
+        async function discoverScanners() {
             global.apis.ui.showProgressSpinner("Finding scanners...", "Scanning the local network");
             try {
                 scanners = await global.apis.documentscanner.discoverScanners();
             } catch (e) {
-                $f7.dialog.alert("Could not discover scanners: " + (e.message || e));
+                global.apis.alert("Could not discover scanners: " + (e.message || e), "Error");
             }
             global.apis.ui.hideProgressSpinner();
             if (scanners.length === 0) {
-                $f7.dialog.alert("No scanners found. Make sure your scanner is powered on, connected to the same network, and supports eSCL/AirPrint.");
+                global.apis.alert("No scanners found. Make sure your scanner is powered on, connected to the same network, and supports eSCL/AirPrint.", "No scanners");
             }
             $update();
-        };
+        }
 
-        const selectScanner = (i) => { selectedScanner = i; $update(); };
+        function selectScanner(i) {
+            selectedScanner = i;
+            $update();
+        }
 
-        const scanDocument = async () => {
-            if (selectedScanner === null) return;
+        async function scanDocument() {
+            if (selectedScanner === null) {
+                global.apis.alert("Pick a scanner first.", "Select scanner");
+                return;
+            }
+            const dpi = parseInt(await plugin.getSetting("app.scantopdf.default_dpi") || "300");
+            const colorMode = await plugin.getSetting("app.scantopdf.default_color") || "RGB24";
+            const intent = await plugin.getSetting("app.scantopdf.default_intent") || "Document";
+
             global.apis.ui.showProgressSpinner("Scanning...", "Please wait");
             try {
                 const scanner = scanners[selectedScanner];
                 const pdfBlob = await global.apis.documentscanner.scanToPDF(scanner, {
-                    dpi: defaultDpi,
-                    colorMode: defaultColor,
-                    intent: "Document",
+                    dpi: dpi,
+                    colorMode: colorMode,
+                    intent: intent
                 });
-                // Convert blob to data URL for preview
                 const reader = new FileReader();
                 reader.onload = () => {
                     pages.push({ preview: reader.result, blob: pdfBlob, source: 'scan' });
@@ -220,19 +261,18 @@
                 reader.readAsDataURL(pdfBlob);
             } catch (e) {
                 global.apis.ui.hideProgressSpinner();
-                $f7.dialog.alert("Scan failed: " + (e.message || e));
+                global.apis.alert("Scan failed: " + (e.message || e), "Error");
             }
-        };
+        }
 
-        const uploadImage = async () => {
+        async function uploadImage() {
             const filePath = global.apis.fs.openFileBrowseDialog(false, "image/*,application/pdf", "Select image or PDF");
             if (!filePath) return;
             try {
                 const data = await global.apis.fs.readFile(filePath, "");
-                // Detect if it's a PDF or image for preview
-                const isPdf = filePath.toLowerCase().endsWith('.pdf');
-                const mime = isPdf ? 'application/pdf'
-                           : filePath.toLowerCase().endsWith('.png') ? 'image/png'
+                const lower = filePath.toLowerCase();
+                const mime = lower.endsWith('.pdf') ? 'application/pdf'
+                           : lower.endsWith('.png') ? 'image/png'
                            : 'image/jpeg';
                 const blob = new Blob([data], { type: mime });
                 const reader = new FileReader();
@@ -242,33 +282,37 @@
                 };
                 reader.readAsDataURL(blob);
             } catch (e) {
-                $f7.dialog.alert("Could not read file: " + (e.message || e));
+                global.apis.alert("Could not read file: " + (e.message || e), "Error");
             }
-        };
+        }
 
-        const removePage = (i) => { pages.splice(i, 1); $update(); };
+        function removePage(i) {
+            pages.splice(i, 1);
+            $update();
+        }
 
-        const movePage = (from, to) => {
+        function movePage(from, to) {
             if (to < 0 || to >= pages.length) return;
             const [moved] = pages.splice(from, 1);
             pages.splice(to, 0, moved);
             $update();
-        };
+        }
 
-        const clearAll = () => {
-            $f7.dialog.confirm("Clear all pages?", () => {
+        function clearAll() {
+            $f7.dialog.confirm("Clear all pages?", "Confirm", () => {
                 pages = [];
                 $update();
             });
-        };
+        }
 
-        const savePDF = async () => {
+        async function savePDF() {
             if (pages.length === 0) return;
-            global.apis.ui.showProgressSpinner("Building PDF...");
+            global.apis.ui.showProgressSpinner("Saving PDF...");
             try {
-                // If all pages are already PDFs (from scanner), we'd merge them.
-                // For the MVP we save the first page and let the user know multi-page merging
-                // is coming - or we use Graphics API to compose images into a PDF.
+                const customerName = document.getElementById("customerNameInput").value || "";
+                const docType = document.getElementById("docTypeSelect").value || "other";
+                const notes = document.getElementById("notesInput").value || "";
+
                 const pdfBlob = pages[0].blob;
                 const safeName = (customerName || "scan").replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "scan";
                 const ts = new Date().toISOString().slice(0, 10);
@@ -280,36 +324,39 @@
                     return;
                 }
 
-                // Read blob into buffer and write
                 const buf = await pdfBlob.arrayBuffer();
                 await global.apis.fs.writeFile(savePath, Buffer.from(buf), "");
 
-                // Log to database
                 const db = await global.apis.database.getConnection();
                 await db.query(
-                    "INSERT INTO scan_to_pdf_documents (customer_name, doc_type, page_count, file_path, notes) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO scantopdf_history (customer_name, doc_type, page_count, file_path, notes) VALUES (?, ?, ?, ?, ?)",
                     [customerName || null, docType, pages.length, savePath, notes || null]
                 );
 
                 global.apis.ui.hideProgressSpinner();
-                $f7.dialog.alert("Saved to: " + savePath, "Done");
-                // Reset for next scan job
+
+                global.apis.f7.notification.create({
+                    icon: '<i class="icon fa-solid fa-check"></i>',
+                    title: 'PDF Saved',
+                    text: savePath,
+                    closeTimeout: 4000
+                }).open();
+
                 pages = [];
-                customerName = '';
-                notes = '';
+                document.getElementById("customerNameInput").value = "";
+                document.getElementById("notesInput").value = "";
                 $update();
             } catch (e) {
                 global.apis.ui.hideProgressSpinner();
-                $f7.dialog.alert("Save failed: " + (e.message || e));
+                global.apis.alert("Save failed: " + (e.message || e), "Error");
             }
-        };
+        }
 
-        const openCreditLink = () => {
+        function openCreditLink() {
             global.apis.ui.openSystemWebBrowser("https://example.com");
-        };
+        }
 
         $on('pageInit', () => {
-            // Try to discover scanners automatically on first load
             discoverScanners();
         });
 
