@@ -325,7 +325,9 @@
                 }
 
                 const buf = await pdfBlob.arrayBuffer();
-                await global.apis.fs.writeFile(savePath, Buffer.from(buf), "");
+                // Use Uint8Array - works in both Node/NW.js contexts; Buffer exists in Node but not always in browser-ish pages
+                const bytes = new Uint8Array(buf);
+                await global.apis.fs.writeFile(savePath, bytes, "");
 
                 const db = await global.apis.database.getConnection();
                 await db.query(
