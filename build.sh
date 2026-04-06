@@ -19,6 +19,11 @@ rm -rf "/tmp/${FOLDER_NAME}"
 mkdir -p "/tmp/${FOLDER_NAME}"
 cp package.json plugin.js page.f7 README.md "/tmp/${FOLDER_NAME}/"
 
+# Include node_modules (pdf-lib is needed at runtime)
+if [ -d "node_modules" ]; then
+    cp -r node_modules "/tmp/${FOLDER_NAME}/"
+fi
+
 # Zip from /tmp so the folder is the root of the archive
 cd /tmp
 zip -rq "${OLDPWD}/${ZIP_NAME}" "${FOLDER_NAME}/"

@@ -14,6 +14,31 @@
         </div>
         <div class="page-content">
 
+            ${showHelp ? $h`
+                <div class="block block-strong inset margin-top" style="background: #e3f2fd; border-left: 4px solid #1976d2;">
+                    <div class="row">
+                        <div class="col-100" style="display: flex; justify-content: space-between; align-items: start;">
+                            <b>How this works</b>
+                            <a href="#" @click=${dismissHelp} class="link" style="font-size: 0.8em;">Got it, hide this →</a>
+                        </div>
+                    </div>
+                    <ol style="padding-left: 18px; margin: 8px 0 0;">
+                        <li><b>Enter the customer name</b> and pick a document type. That goes into the filename automatically.</li>
+                        <li><b>Pick a scanner</b> from the list below, or refresh if you don't see yours. Scanner must be on the same network and support eSCL/AirPrint.</li>
+                        <li><b>Scan a page</b> - each click of "Scan Page" adds one page to the current job. Scan as many as you need.</li>
+                        <li><b>Or upload files</b> - PDFs, photos, screenshots, SVGs, anything. They'll be converted and added as pages.</li>
+                        <li><b>Reorder</b> with the ← → buttons on each thumbnail. Remove one with the × button.</li>
+                        <li><b>Click Save PDF</b> when done. All pages combine into one multi-page PDF, and the save dialog opens.</li>
+                    </ol>
+                    <p style="margin: 8px 0 0; font-size: 0.85em; opacity: 0.8;">
+                        <b>Common workflows:</b><br/>
+                        • <b>ID for Form 1583:</b> Customer name → "ID / Driver's License" → scan front → scan back → save. Done.<br/>
+                        • <b>Contract archive:</b> Customer name → "Contract" → scan all pages in the feeder → save. One PDF, filed.<br/>
+                        • <b>Multi-page receipt from phone:</b> Customer name → "Tax" → upload phone photos one by one → reorder → save.
+                    </p>
+                </div>
+            ` : ''}
+
             <div class="block-title">Document Info</div>
             <div class="list no-hairlines-md inset">
                 <ul>
@@ -21,7 +46,7 @@
                         <div class="item-inner">
                             <div class="item-title item-label">Customer name</div>
                             <div class="item-input-wrap">
-                                <input type="text" id="customerNameInput" placeholder="Optional" />
+                                <input type="text" id="customerNameInput" placeholder="Optional - included in filename" />
                             </div>
                         </div>
                     </li>
@@ -48,7 +73,7 @@
                         <div class="item-inner">
                             <div class="item-title item-label">Notes</div>
                             <div class="item-input-wrap">
-                                <input type="text" id="notesInput" placeholder="Optional" />
+                                <input type="text" id="notesInput" placeholder="Optional extra notes" />
                             </div>
                         </div>
                     </li>
@@ -106,7 +131,7 @@
                     </div>
                 </div>
                 <p class="text-color-gray margin-top" style="font-size: 0.85em;">
-                    Scan from a network scanner, or upload phone photos / existing files.
+                    Each scan adds a new page. Click Save PDF when done to combine them all into one file.
                 </p>
             </div>
 
@@ -210,11 +235,22 @@
 
 <script>
     export default (props, { $f7, $on, $update }) => {
-        const plugin = require(global.apis.getPluginFolder("app.scantopdf") + "/plugin.js");
+        const pluginID = "app.scantopdf";
+        const plugin = require(global.apis.getPluginFolder(pluginID) + "/plugin.js");
+        const { PDFDocument } = require(global.apis.getPluginFolder(pluginID) + "/node_modules/pdf-lib");
 
         var scanners = [];
         var selectedScanner = null;
+        // Each page: { preview: dataUrl for thumb, bytes: Uint8Array of PDF/image, mime: string }
         var pages = [];
+        // Show help box until user dismisses it (stored per-station in settings)
+        var showHelp = global.apis.settings.get(pluginID + ".help_dismissed", "no") !== "yes";
+
+        function dismissHelp() {
+            showHelp = false;
+            global.apis.settings.set(pluginID + ".help_dismissed", "yes");
+            $update();
+        }
 
         async function discoverScanners() {
             global.apis.ui.showProgressSpinner("Finding scanners...", "Scanning the local network");
@@ -235,14 +271,18 @@
             $update();
         }
 
+        async function blobToBytes(blob) {
+            return new Uint8Array(await blob.arrayBuffer());
+        }
+
         async function scanDocument() {
             if (selectedScanner === null) {
                 global.apis.alert("Pick a scanner first.", "Select scanner");
                 return;
             }
-            const dpi = parseInt(await plugin.getSetting("app.scantopdf.default_dpi") || "300");
-            const colorMode = await plugin.getSetting("app.scantopdf.default_color") || "RGB24";
-            const intent = await plugin.getSetting("app.scantopdf.default_intent") || "Document";
+            const dpi = parseInt(await plugin.getSetting(pluginID + ".default_dpi") || "300");
+            const colorMode = await plugin.getSetting(pluginID + ".default_color") || "RGB24";
+            const intent = await plugin.getSetting(pluginID + ".default_intent") || "Document";
 
             global.apis.ui.showProgressSpinner("Scanning...", "Please wait");
             try {
@@ -252,41 +292,119 @@
                     colorMode: colorMode,
                     intent: intent
                 });
-                const reader = new FileReader();
-                reader.onload = () => {
-                    pages.push({ preview: reader.result, blob: pdfBlob, source: 'scan' });
-                    $update();
-                    global.apis.ui.hideProgressSpinner();
-                };
-                reader.readAsDataURL(pdfBlob);
+                const bytes = await blobToBytes(pdfBlob);
+                // Generate a preview thumb - render first page of the PDF to canvas via pdf-lib isn't trivial without pdf.js,
+                // so we just show a generic "PDF page" icon as data URL, or use the PDF data URL directly (browsers embed it).
+                const preview = URL.createObjectURL(pdfBlob);
+                pages.push({ preview, bytes, mime: "application/pdf", source: 'scan' });
+                $update();
+                global.apis.ui.hideProgressSpinner();
+                global.apis.f7.notification.create({
+                    icon: '<i class="icon fa-solid fa-plus"></i>',
+                    title: `Page ${pages.length} added`,
+                    closeTimeout: 1500
+                }).open();
             } catch (e) {
                 global.apis.ui.hideProgressSpinner();
                 global.apis.alert("Scan failed: " + (e.message || e), "Error");
             }
         }
 
-        async function uploadImage() {
-            const filePath = global.apis.fs.openFileBrowseDialog(false, "image/*,application/pdf", "Select image or PDF");
-            if (!filePath) return;
+        // Render an arbitrary image blob (SVG, WEBP, BMP, TIFF, etc.) to PNG bytes via canvas.
+        // Returns { bytes: Uint8Array, mime: "image/png" } or throws.
+        async function rasterizeToPNG(blob) {
+            const url = URL.createObjectURL(blob);
             try {
-                const data = await global.apis.fs.readFile(filePath, "");
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = () => reject(new Error("Browser could not decode this image format."));
+                    img.src = url;
+                });
+                const canvas = document.createElement("canvas");
+                canvas.width = img.naturalWidth || img.width || 800;
+                canvas.height = img.naturalHeight || img.height || 600;
+                const ctx = canvas.getContext("2d");
+                ctx.fillStyle = "#ffffff"; // white background for transparent images
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0);
+                const pngBlob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+                const arr = await pngBlob.arrayBuffer();
+                return { bytes: new Uint8Array(arr), mime: "image/png" };
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+        }
+
+        async function uploadImage() {
+            // No accept filter - pick anything. We'll try to convert as needed.
+            const filePath = global.apis.fs.openFileBrowseDialog(false, "", "Select a file to add");
+            if (!filePath) return;
+            global.apis.ui.showProgressSpinner("Loading file...");
+            try {
+                const raw = await global.apis.fs.readFile(filePath, null);
+                let bytes = new Uint8Array(raw.buffer ? raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) : raw);
+
                 const lower = filePath.toLowerCase();
-                const mime = lower.endsWith('.pdf') ? 'application/pdf'
-                           : lower.endsWith('.png') ? 'image/png'
-                           : 'image/jpeg';
-                const blob = new Blob([data], { type: mime });
-                const reader = new FileReader();
-                reader.onload = () => {
-                    pages.push({ preview: reader.result, blob, source: 'upload' });
-                    $update();
-                };
-                reader.readAsDataURL(blob);
+                let mime;
+                let preview;
+
+                if (lower.endsWith(".pdf")) {
+                    mime = "application/pdf";
+                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                } else if (lower.endsWith(".png")) {
+                    mime = "image/png";
+                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+                    mime = "image/jpeg";
+                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                } else if (lower.endsWith(".svg")) {
+                    // Rasterize SVG to PNG so pdf-lib can embed it
+                    const svgBlob = new Blob([bytes], { type: "image/svg+xml" });
+                    const raster = await rasterizeToPNG(svgBlob);
+                    bytes = raster.bytes; mime = raster.mime;
+                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                } else if (lower.match(/\.(webp|bmp|gif|tif|tiff|heic|heif|avif)$/)) {
+                    // Let the browser try - then rasterize to PNG
+                    const imgBlob = new Blob([bytes], { type: "application/octet-stream" });
+                    const raster = await rasterizeToPNG(imgBlob);
+                    bytes = raster.bytes; mime = raster.mime;
+                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                } else if (lower.match(/\.(doc|docx|odt|rtf|txt|xls|xlsx|ppt|pptx)$/)) {
+                    global.apis.ui.hideProgressSpinner();
+                    global.apis.alert("Office documents aren't supported directly.\n\nOpen the file in its app and print to PDF first, then upload that PDF here.", "Convert to PDF first");
+                    return;
+                } else {
+                    // Last-ditch: try to render as image
+                    try {
+                        const blob = new Blob([bytes]);
+                        const raster = await rasterizeToPNG(blob);
+                        bytes = raster.bytes; mime = raster.mime;
+                        preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    } catch (e) {
+                        global.apis.ui.hideProgressSpinner();
+                        global.apis.alert("Can't add this file type. Supported: PDF, PNG, JPG, SVG, WEBP, BMP, TIFF, GIF, HEIC, AVIF.\n\nFor Office docs, print to PDF first.", "Unsupported");
+                        return;
+                    }
+                }
+
+                pages.push({ preview, bytes, mime, source: "upload" });
+                global.apis.ui.hideProgressSpinner();
+                global.apis.f7.notification.create({
+                    icon: '<i class="icon fa-solid fa-plus"></i>',
+                    title: `Page ${pages.length} added`,
+                    closeTimeout: 1500
+                }).open();
+                $update();
             } catch (e) {
-                global.apis.alert("Could not read file: " + (e.message || e), "Error");
+                global.apis.ui.hideProgressSpinner();
+                global.apis.alert("Could not read file: " + (e.message || e) + "\n\nPath: " + filePath, "Upload Error");
             }
         }
 
         function removePage(i) {
+            if (pages[i].preview && pages[i].preview.startsWith("blob:")) URL.revokeObjectURL(pages[i].preview);
             pages.splice(i, 1);
             $update();
         }
@@ -300,34 +418,55 @@
 
         function clearAll() {
             $f7.dialog.confirm("Clear all pages?", "Confirm", () => {
+                pages.forEach((p) => { if (p.preview.startsWith("blob:")) URL.revokeObjectURL(p.preview); });
                 pages = [];
                 $update();
             });
         }
 
+        // Merge all pages (PDFs and images) into one combined PDF
+        async function buildCombinedPdf() {
+            const out = await PDFDocument.create();
+            for (const p of pages) {
+                if (p.mime === "application/pdf") {
+                    const src = await PDFDocument.load(p.bytes);
+                    const copiedPages = await out.copyPages(src, src.getPageIndices());
+                    copiedPages.forEach((pg) => out.addPage(pg));
+                } else if (p.mime === "image/png") {
+                    const img = await out.embedPng(p.bytes);
+                    const page = out.addPage([img.width, img.height]);
+                    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                } else {
+                    // JPEG or other
+                    const img = await out.embedJpg(p.bytes);
+                    const page = out.addPage([img.width, img.height]);
+                    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                }
+            }
+            return await out.save();
+        }
+
         async function savePDF() {
             if (pages.length === 0) return;
-            global.apis.ui.showProgressSpinner("Saving PDF...");
+            global.apis.ui.showProgressSpinner("Building PDF...", `Combining ${pages.length} page${pages.length > 1 ? "s" : ""}`);
             try {
                 const customerName = document.getElementById("customerNameInput").value || "";
                 const docType = document.getElementById("docTypeSelect").value || "other";
                 const notes = document.getElementById("notesInput").value || "";
 
-                const pdfBlob = pages[0].blob;
+                // Combine all pages into one PDF
+                const combinedBytes = await buildCombinedPdf();
+
                 const safeName = (customerName || "scan").replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "scan";
                 const ts = new Date().toISOString().slice(0, 10);
                 const suggestedName = `${safeName}-${docType}-${ts}.pdf`;
 
+                global.apis.ui.hideProgressSpinner();
                 const savePath = await global.apis.fs.openFileSaveDialog(suggestedName, ".pdf");
-                if (!savePath) {
-                    global.apis.ui.hideProgressSpinner();
-                    return;
-                }
+                if (!savePath) return;
 
-                const buf = await pdfBlob.arrayBuffer();
-                // Use Uint8Array - works in both Node/NW.js contexts; Buffer exists in Node but not always in browser-ish pages
-                const bytes = new Uint8Array(buf);
-                await global.apis.fs.writeFile(savePath, bytes, "");
+                global.apis.ui.showProgressSpinner("Saving...");
+                await global.apis.fs.writeFile(savePath, combinedBytes, "");
 
                 const db = await global.apis.database.getConnection();
                 await db.query(
@@ -339,11 +478,13 @@
 
                 global.apis.f7.notification.create({
                     icon: '<i class="icon fa-solid fa-check"></i>',
-                    title: 'PDF Saved',
+                    title: `${pages.length}-page PDF Saved`,
                     text: savePath,
                     closeTimeout: 4000
                 }).open();
 
+                // Reset
+                pages.forEach((p) => { if (p.preview.startsWith("blob:")) URL.revokeObjectURL(p.preview); });
                 pages = [];
                 document.getElementById("customerNameInput").value = "";
                 document.getElementById("notesInput").value = "";
@@ -360,6 +501,11 @@
 
         $on('pageInit', () => {
             discoverScanners();
+        });
+
+        $on('pageAfterOut', () => {
+            // Clean up blob URLs
+            pages.forEach((p) => { if (p.preview && p.preview.startsWith("blob:")) URL.revokeObjectURL(p.preview); });
         });
 
         return $render;
