@@ -272,7 +272,24 @@
         }
 
         async function blobToBytes(blob) {
-            return new Uint8Array(await blob.arrayBuffer());
+            if (!blob || typeof blob.arrayBuffer !== "function") {
+                throw new Error("Invalid blob passed to blobToBytes");
+            }
+            const ab = await blob.arrayBuffer();
+            if (!ab || !(ab instanceof ArrayBuffer) || ab.byteLength === 0) {
+                throw new Error("Empty or invalid arrayBuffer (byteLength=" + (ab && ab.byteLength) + ")");
+            }
+            return new Uint8Array(ab);
+        }
+
+        // Ensure a value is a proper Uint8Array that pdf-lib will accept
+        function ensureBytes(v) {
+            if (v instanceof Uint8Array) return v;
+            if (v instanceof ArrayBuffer) return new Uint8Array(v);
+            if (v && typeof v === "object" && v.buffer instanceof ArrayBuffer) {
+                return new Uint8Array(v.buffer, v.byteOffset || 0, v.byteLength || v.buffer.byteLength);
+            }
+            throw new Error("Value is not bytes: " + (v === null ? "null" : typeof v));
         }
 
         async function attemptScan(retriesLeft) {
@@ -450,20 +467,27 @@
         // Merge all pages (PDFs and images) into one combined PDF
         async function buildCombinedPdf() {
             const out = await PDFDocument.create();
-            for (const p of pages) {
-                if (p.mime === "application/pdf") {
-                    const src = await PDFDocument.load(p.bytes);
-                    const copiedPages = await out.copyPages(src, src.getPageIndices());
-                    copiedPages.forEach((pg) => out.addPage(pg));
-                } else if (p.mime === "image/png") {
-                    const img = await out.embedPng(p.bytes);
-                    const page = out.addPage([img.width, img.height]);
-                    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
-                } else {
-                    // JPEG or other
-                    const img = await out.embedJpg(p.bytes);
-                    const page = out.addPage([img.width, img.height]);
-                    page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+            for (let i = 0; i < pages.length; i++) {
+                const p = pages[i];
+                try {
+                    const bytes = ensureBytes(p.bytes);
+                    if (p.mime === "application/pdf") {
+                        const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+                        const copiedPages = await out.copyPages(src, src.getPageIndices());
+                        copiedPages.forEach((pg) => out.addPage(pg));
+                    } else if (p.mime === "image/png") {
+                        const img = await out.embedPng(bytes);
+                        const page = out.addPage([img.width, img.height]);
+                        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                    } else if (p.mime === "image/jpeg" || p.mime === "image/jpg") {
+                        const img = await out.embedJpg(bytes);
+                        const page = out.addPage([img.width, img.height]);
+                        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+                    } else {
+                        throw new Error(`Unsupported mime type "${p.mime}" on page ${i + 1}`);
+                    }
+                } catch (e) {
+                    throw new Error(`Page ${i + 1} (${p.mime}): ${e.message || e}`);
                 }
             }
             return await out.save();
