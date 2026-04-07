@@ -275,26 +275,41 @@
             return new Uint8Array(await blob.arrayBuffer());
         }
 
-        async function scanDocument() {
-            if (selectedScanner === null) {
-                global.apis.alert("Pick a scanner first.", "Select scanner");
-                return;
-            }
+        async function attemptScan(retriesLeft) {
             const dpi = parseInt(await plugin.getSetting(pluginID + ".default_dpi") || "300");
             const colorMode = await plugin.getSetting(pluginID + ".default_color") || "RGB24";
             const intent = await plugin.getSetting(pluginID + ".default_intent") || "Document";
+            const scanner = scanners[selectedScanner];
+            try {
+                return await global.apis.documentscanner.scanToPDF(scanner, {
+                    dpi: dpi, colorMode: colorMode, intent: intent
+                });
+            } catch (e) {
+                if (retriesLeft > 0) {
+                    // Re-discover and retry - some scanners need a second handshake
+                    global.apis.ui.showProgressSpinner("Scanner didn't respond...", "Rediscovering and retrying");
+                    try {
+                        scanners = await global.apis.documentscanner.discoverScanners();
+                        const match = scanners.findIndex((s) => s.uuid === scanner.uuid || s.host === scanner.host);
+                        if (match >= 0) selectedScanner = match;
+                    } catch { /* ignore */ }
+                    await new Promise((r) => setTimeout(r, 500));
+                    return attemptScan(retriesLeft - 1);
+                }
+                throw e;
+            }
+        }
+
+        async function scanDocument() {
+            if (selectedScanner === null) {
+                global.apis.alert("Pick a scanner first.\n\nIf the list is empty, tap 'Refresh Scanner List' below. Scanners sometimes take a moment to appear on the network.", "Select scanner");
+                return;
+            }
 
             global.apis.ui.showProgressSpinner("Scanning...", "Please wait");
             try {
-                const scanner = scanners[selectedScanner];
-                const pdfBlob = await global.apis.documentscanner.scanToPDF(scanner, {
-                    dpi: dpi,
-                    colorMode: colorMode,
-                    intent: intent
-                });
+                const pdfBlob = await attemptScan(1); // 1 retry on first failure
                 const bytes = await blobToBytes(pdfBlob);
-                // Generate a preview thumb - render first page of the PDF to canvas via pdf-lib isn't trivial without pdf.js,
-                // so we just show a generic "PDF page" icon as data URL, or use the PDF data URL directly (browsers embed it).
                 const preview = URL.createObjectURL(pdfBlob);
                 pages.push({ preview, bytes, mime: "application/pdf", source: 'scan' });
                 $update();
@@ -306,7 +321,15 @@
                 }).open();
             } catch (e) {
                 global.apis.ui.hideProgressSpinner();
-                global.apis.alert("Scan failed: " + (e.message || e), "Error");
+                global.apis.alert(
+                    "Scan failed after retry: " + (e.message || e) + "\n\n" +
+                    "Try these:\n" +
+                    "1. Tap 'Refresh Scanner List' to rediscover\n" +
+                    "2. Make sure a page is loaded in the feeder or flatbed\n" +
+                    "3. Check the scanner's network connection\n" +
+                    "4. Some scanners sleep - wake it at the front panel and try again",
+                    "Scan Error"
+                );
             }
         }
 
