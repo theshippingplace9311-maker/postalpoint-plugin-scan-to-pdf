@@ -50,6 +50,14 @@
                             </div>
                         </div>
                     </li>
+                    <li class="item-content item-input">
+                        <div class="item-inner">
+                            <div class="item-title item-label">Company / Brand</div>
+                            <div class="item-input-wrap">
+                                <input type="text" id="companyInput" placeholder="Optional - groups files by company for invoicing" />
+                            </div>
+                        </div>
+                    </li>
                     <li>
                         <a href="#" class="item-link smart-select smart-select-init">
                             <select id="docTypeSelect" name="doctype">
@@ -498,15 +506,21 @@
             global.apis.ui.showProgressSpinner("Building PDF...", `Combining ${pages.length} page${pages.length > 1 ? "s" : ""}`);
             try {
                 const customerName = document.getElementById("customerNameInput").value || "";
+                const company = document.getElementById("companyInput").value || "";
                 const docType = document.getElementById("docTypeSelect").value || "other";
                 const notes = document.getElementById("notesInput").value || "";
 
                 // Combine all pages into one PDF
                 const combinedBytes = await buildCombinedPdf();
 
-                const safeName = (customerName || "scan").replace(/[^a-zA-Z0-9 _-]/g, "").trim() || "scan";
+                // Build filename: Company_Customer-doctype-date.pdf (company comes first so files sort by company)
+                const cleanSeg = (s) => s.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
+                const parts = [];
+                if (company) parts.push(cleanSeg(company));
+                if (customerName) parts.push(cleanSeg(customerName));
+                if (parts.length === 0) parts.push("scan");
                 const ts = new Date().toISOString().slice(0, 10);
-                const suggestedName = `${safeName}-${docType}-${ts}.pdf`;
+                const suggestedName = `${parts.join("-")}-${docType}-${ts}.pdf`;
 
                 global.apis.ui.hideProgressSpinner();
                 const savePath = await global.apis.fs.openFileSaveDialog(suggestedName, ".pdf");
@@ -516,9 +530,11 @@
                 await global.apis.fs.writeFile(savePath, combinedBytes, "");
 
                 const db = await global.apis.database.getConnection();
+                // Add company column if missing (idempotent)
+                try { await db.query("ALTER TABLE scantopdf_history ADD COLUMN company TEXT"); } catch { /* exists */ }
                 await db.query(
-                    "INSERT INTO scantopdf_history (customer_name, doc_type, page_count, file_path, notes) VALUES (?, ?, ?, ?, ?)",
-                    [customerName || null, docType, pages.length, savePath, notes || null]
+                    "INSERT INTO scantopdf_history (customer_name, company, doc_type, page_count, file_path, notes) VALUES (?, ?, ?, ?, ?, ?)",
+                    [customerName || null, company || null, docType, pages.length, savePath, notes || null]
                 );
 
                 global.apis.ui.hideProgressSpinner();
@@ -534,6 +550,7 @@
                 pages.forEach((p) => { if (p.preview.startsWith("blob:")) URL.revokeObjectURL(p.preview); });
                 pages = [];
                 document.getElementById("customerNameInput").value = "";
+                document.getElementById("companyInput").value = "";
                 document.getElementById("notesInput").value = "";
                 $update();
             } catch (e) {

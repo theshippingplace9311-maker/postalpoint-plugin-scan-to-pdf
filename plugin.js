@@ -22,6 +22,7 @@ exports.init = function () {
                 CREATE TABLE IF NOT EXISTS scantopdf_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     customer_name TEXT,
+                    company TEXT,
                     doc_type TEXT,
                     page_count INTEGER,
                     file_path TEXT,
@@ -29,6 +30,8 @@ exports.init = function () {
                     created_at TEXT DEFAULT (datetime('now'))
                 )
             `);
+            // If table pre-dated the company column, add it
+            try { await db.query("ALTER TABLE scantopdf_history ADD COLUMN company TEXT"); } catch { /* exists */ }
         } catch (e) {
             console.error("[scantopdf] Schema init failed:", e);
         }
