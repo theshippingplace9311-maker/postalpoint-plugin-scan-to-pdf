@@ -533,8 +533,10 @@
 
         async function uploadImage() {
             // No accept filter - pick anything. We'll try to convert as needed.
-            const filePath = global.apis.fs.openFileBrowseDialog(false, "", "Select a file to add");
-            if (!filePath) return;
+            // Docs say this is sync but it can return a Promise in practice - handle both.
+            let filePath = global.apis.fs.openFileBrowseDialog(false, "", "Select a file to add");
+            if (filePath && typeof filePath.then === "function") filePath = await filePath;
+            if (!filePath || typeof filePath !== "string") return;
             global.apis.ui.showProgressSpinner("Loading file...");
             try {
                 const raw = await global.apis.fs.readFile(filePath, null);

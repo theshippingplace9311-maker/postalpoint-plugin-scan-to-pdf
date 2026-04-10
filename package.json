@@ -1,7 +1,7 @@
 {
     "name": "app.scantopdf",
     "main": "plugin.js",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "author": "admin01",
     "description": "Drive network scanners and combine captures with uploaded images into organized PDF files on disk. Document type tagging, customer linking, searchable history. Does NOT charge the customer - use alongside PrintScanTool for billing. This plugin handles the actual scan-to-file workflow.",
     "postalpoint": {
