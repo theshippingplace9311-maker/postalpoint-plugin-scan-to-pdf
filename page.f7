@@ -15,8 +15,8 @@
         <div class="page-content">
 
             <!-- Tab switcher: New Scan vs. History -->
-            <div class="margin">
-                <p class="segmented segmented-strong">
+            <div class="margin" style="display: flex; align-items: center; gap: 8px;">
+                <p class="segmented segmented-strong" style="flex: 1;">
                     <button class="button ${tab==='new' ? 'button-active' : ''}" @click=${() => setTab('new')}>
                         <i class="icon fa-solid fa-plus margin-right-half"></i> New Scan
                     </button>
@@ -25,6 +25,11 @@
                     </button>
                     <span class="segmented-highlight"></span>
                 </p>
+                ${tab === 'new' && !showHelp ? $h`
+                    <a href="#" @click=${showHelpAgain} class="link" style="font-size: 0.85em; white-space: nowrap;" title="Show the How-it-works tips again">
+                        <i class="icon fa-solid fa-circle-info"></i> Show Tips
+                    </a>
+                ` : ''}
             </div>
 
             ${tab === 'history' ? $h`
@@ -96,7 +101,7 @@
                     <div class="row">
                         <div class="col-100" style="display: flex; justify-content: space-between; align-items: start;">
                             <b>How this works</b>
-                            <a href="#" @click=${dismissHelp} class="link" style="font-size: 0.8em;">Got it, hide this →</a>
+                            <a href="#" @click=${dismissHelp} class="link" style="font-size: 0.8em;">Minimize tips →</a>
                         </div>
                     </div>
                     <ol style="padding-left: 18px; margin: 8px 0 0;">
@@ -403,6 +408,12 @@
         function dismissHelp() {
             showHelp = false;
             global.apis.settings.set(pluginID + ".help_dismissed", "yes");
+            $update();
+        }
+
+        function showHelpAgain() {
+            showHelp = true;
+            global.apis.settings.set(pluginID + ".help_dismissed", "no");
             $update();
         }
 
