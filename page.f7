@@ -263,9 +263,7 @@
 
             `}
             <div class="block text-align-center text-color-gray" style="font-size: 0.8em; padding: 24px 0 8px;">
-                Scan to PDF · Built by admin01 · <br/>
-                <a href="#" @click=${openCreditLink}>example.com</a>
-            </div>
+                Scan to PDF · Built by admin01            </div>
         </div>
     </div>
 </template>
@@ -332,7 +330,8 @@
 
         var scanners = [];
         var selectedScanner = null;
-        // Each page: { preview: dataUrl for thumb, bytes: Uint8Array of PDF/image, mime: string }
+        // Each page: { preview: url for thumb, blob: Blob of PDF/image, mime: string, source: 'scan' | 'upload' }
+        // Keep the Blob - we'll read fresh bytes at save-time.
         var pages = [];
         // Tab: 'new' or 'history'
         var tab = 'new';
@@ -436,25 +435,24 @@
             $update();
         }
 
-        async function blobToBytes(blob) {
-            if (!blob || typeof blob.arrayBuffer !== "function") {
-                throw new Error("Invalid blob passed to blobToBytes");
+        // Read a blob into a fresh Uint8Array every time - NW.js needs fresh bytes each call.
+        // Don't cache bytes; always go back to the Blob source.
+        async function blobToFreshBytes(blob) {
+            if (!blob) throw new Error("Blob is null/undefined");
+            if (typeof blob.arrayBuffer !== "function") {
+                throw new Error("Source has no arrayBuffer() method - got " + typeof blob);
             }
             const ab = await blob.arrayBuffer();
-            if (!ab || !(ab instanceof ArrayBuffer) || ab.byteLength === 0) {
-                throw new Error("Empty or invalid arrayBuffer (byteLength=" + (ab && ab.byteLength) + ")");
-            }
-            return new Uint8Array(ab);
-        }
+            if (!ab) throw new Error("arrayBuffer returned null");
+            const byteLength = ab.byteLength;
+            if (byteLength === 0) throw new Error("Empty blob (0 bytes)");
 
-        // Ensure a value is a proper Uint8Array that pdf-lib will accept
-        function ensureBytes(v) {
-            if (v instanceof Uint8Array) return v;
-            if (v instanceof ArrayBuffer) return new Uint8Array(v);
-            if (v && typeof v === "object" && v.buffer instanceof ArrayBuffer) {
-                return new Uint8Array(v.buffer, v.byteOffset || 0, v.byteLength || v.buffer.byteLength);
-            }
-            throw new Error("Value is not bytes: " + (v === null ? "null" : typeof v));
+            // ab might be ArrayBuffer or SharedArrayBuffer or Buffer - normalize all to Uint8Array
+            if (ab instanceof ArrayBuffer) return new Uint8Array(ab);
+            if (ab instanceof Uint8Array) return new Uint8Array(ab.buffer, ab.byteOffset, ab.byteLength);
+            // Fallback: try to construct from whatever it gave us
+            try { return new Uint8Array(ab); }
+            catch (e) { throw new Error("Could not convert to Uint8Array: " + (e && e.message) + " (got " + typeof ab + ")"); }
         }
 
         async function attemptScan(retriesLeft) {
@@ -491,9 +489,15 @@
             global.apis.ui.showProgressSpinner("Scanning...", "Please wait");
             try {
                 const pdfBlob = await attemptScan(1); // 1 retry on first failure
-                const bytes = await blobToBytes(pdfBlob);
+                if (!pdfBlob || typeof pdfBlob.arrayBuffer !== "function") {
+                    throw new Error("Scanner returned something that isn't a blob: " + typeof pdfBlob);
+                }
+                // Quick sanity check - make sure we can read SOME bytes out of it
+                const testBytes = await blobToFreshBytes(pdfBlob);
+                console.log("[scantopdf] Scan produced", testBytes.length, "bytes");
+
                 const preview = URL.createObjectURL(pdfBlob);
-                pages.push({ preview, bytes, mime: "application/pdf", source: 'scan' });
+                pages.push({ preview, blob: pdfBlob, mime: "application/pdf", source: 'scan' });
                 $update();
                 global.apis.ui.hideProgressSpinner();
                 global.apis.f7.notification.create({
@@ -557,38 +561,36 @@
                 let mime;
                 let preview;
 
+                let finalBlob;
                 if (lower.endsWith(".pdf")) {
                     mime = "application/pdf";
-                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    finalBlob = new Blob([bytes], { type: mime });
                 } else if (lower.endsWith(".png")) {
                     mime = "image/png";
-                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    finalBlob = new Blob([bytes], { type: mime });
                 } else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
                     mime = "image/jpeg";
-                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    finalBlob = new Blob([bytes], { type: mime });
                 } else if (lower.endsWith(".svg")) {
-                    // Rasterize SVG to PNG so pdf-lib can embed it
                     const svgBlob = new Blob([bytes], { type: "image/svg+xml" });
                     const raster = await rasterizeToPNG(svgBlob);
-                    bytes = raster.bytes; mime = raster.mime;
-                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    mime = raster.mime;
+                    finalBlob = new Blob([raster.bytes], { type: mime });
                 } else if (lower.match(/\.(webp|bmp|gif|tif|tiff|heic|heif|avif)$/)) {
-                    // Let the browser try - then rasterize to PNG
                     const imgBlob = new Blob([bytes], { type: "application/octet-stream" });
                     const raster = await rasterizeToPNG(imgBlob);
-                    bytes = raster.bytes; mime = raster.mime;
-                    preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    mime = raster.mime;
+                    finalBlob = new Blob([raster.bytes], { type: mime });
                 } else if (lower.match(/\.(doc|docx|odt|rtf|txt|xls|xlsx|ppt|pptx)$/)) {
                     global.apis.ui.hideProgressSpinner();
                     global.apis.alert("Office documents aren't supported directly.\n\nOpen the file in its app and print to PDF first, then upload that PDF here.", "Convert to PDF first");
                     return;
                 } else {
-                    // Last-ditch: try to render as image
                     try {
                         const blob = new Blob([bytes]);
                         const raster = await rasterizeToPNG(blob);
-                        bytes = raster.bytes; mime = raster.mime;
-                        preview = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                        mime = raster.mime;
+                        finalBlob = new Blob([raster.bytes], { type: mime });
                     } catch (e) {
                         global.apis.ui.hideProgressSpinner();
                         global.apis.alert("Can't add this file type. Supported: PDF, PNG, JPG, SVG, WEBP, BMP, TIFF, GIF, HEIC, AVIF.\n\nFor Office docs, print to PDF first.", "Unsupported");
@@ -596,7 +598,8 @@
                     }
                 }
 
-                pages.push({ preview, bytes, mime, source: "upload" });
+                preview = URL.createObjectURL(finalBlob);
+                pages.push({ preview, blob: finalBlob, mime, source: "upload" });
                 global.apis.ui.hideProgressSpinner();
                 global.apis.f7.notification.create({
                     icon: '<i class="icon fa-solid fa-plus"></i>',
@@ -637,7 +640,12 @@
             for (let i = 0; i < pages.length; i++) {
                 const p = pages[i];
                 try {
-                    const bytes = ensureBytes(p.bytes);
+                    // Read FRESH bytes from the blob every time - no cached Uint8Array corruption
+                    const bytes = await blobToFreshBytes(p.blob);
+                    if (!bytes || !(bytes instanceof Uint8Array) || bytes.length === 0) {
+                        throw new Error("Got empty or invalid bytes (length=" + (bytes && bytes.length) + ", ctor=" + (bytes && bytes.constructor && bytes.constructor.name) + ")");
+                    }
+
                     if (p.mime === "application/pdf") {
                         const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
                         const copiedPages = await out.copyPages(src, src.getPageIndices());
@@ -716,10 +724,6 @@
                 global.apis.ui.hideProgressSpinner();
                 global.apis.alert("Save failed: " + (e.message || e), "Error");
             }
-        }
-
-        function openCreditLink() {
-            global.apis.ui.openSystemWebBrowser("https://example.com");
         }
 
         $on('pageInit', () => {
