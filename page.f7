@@ -112,6 +112,9 @@
                         <li><b>Reorder</b> with the ← → buttons on each thumbnail. Remove one with the × button.</li>
                         <li><b>Click Save PDF</b> when done. All pages combine into one multi-page PDF, and the save dialog opens.</li>
                     </ol>
+                    <p style="margin: 8px 0 0; font-size: 0.85em; background: #fff8e1; padding: 6px 10px; border-radius: 4px; border-left: 3px solid #f57c00;">
+                        <b>Scanner compatibility note:</b> Some network scanners output PDFs in a non-standard format the merge library can't handle. When that happens, each scanned page saves as its own numbered file (<i>...-page01.pdf, ...-page02.pdf</i>) - nothing is lost. Single-page scans always save cleanly as-is.
+                    </p>
                     <p style="margin: 8px 0 0; font-size: 0.85em; opacity: 0.8;">
                         <b>Common workflows:</b><br/>
                         • <b>ID for Form 1583:</b> Customer name → "ID / Driver's License" → scan front → scan back → save. Done.<br/>
@@ -245,6 +248,15 @@
                     </div>
                 </div>
 
+                ${pages.length > 1 && pages.some((p) => p.mime === "application/pdf") ? $h`
+                    <div class="block block-strong inset" style="background: #fff8e1; border-left: 4px solid #f57c00; font-size: 0.85em;">
+                        <b><i class="icon fa-solid fa-circle-info"></i> Heads up - multi-page with scanned PDFs:</b>
+                        Some network scanners produce PDFs the merge library can't combine.
+                        If merging fails, each page will save as its own file (<i>...-page01.pdf, ...-page02.pdf</i>) instead.
+                        <br/>Single-page scans always save cleanly.
+                    </div>
+                ` : ''}
+
                 <div class="block inset">
                     <div class="row">
                         <div class="col-50">
@@ -263,7 +275,7 @@
 
             `}
             <div class="block text-align-center text-color-gray" style="font-size: 0.8em; padding: 24px 0 8px;">
-                Scan to PDF v1.7.0 · Built by admin01            </div>
+                Scan to PDF v1.8.5 · Built by admin01            </div>
         </div>
     </div>
 </template>
@@ -326,7 +338,19 @@
     export default (props, { $f7, $on, $update }) => {
         const pluginID = "app.scantopdf";
         const plugin = require(global.apis.getPluginFolder(pluginID) + "/plugin.js");
-        const { PDFDocument } = require(global.apis.getPluginFolder(pluginID) + "/node_modules/pdf-lib");
+
+        // Lazy pdf-lib loader - only fires when we actually save a PDF, so a bad
+        // require can never break the scanner or the page itself
+        let _PDFDocument = null;
+        function getPDFDocument() {
+            if (_PDFDocument) return _PDFDocument;
+            const pdfLib = require(global.apis.getPluginFolder(pluginID) + "/node_modules/pdf-lib");
+            _PDFDocument = pdfLib.PDFDocument || (pdfLib.default && pdfLib.default.PDFDocument);
+            if (!_PDFDocument || typeof _PDFDocument.load !== "function") {
+                throw new Error("pdf-lib PDFDocument not available (module keys: " + Object.keys(pdfLib || {}).join(",") + ")");
+            }
+            return _PDFDocument;
+        }
 
         var scanners = [];
         var selectedScanner = null;
@@ -634,35 +658,121 @@
             });
         }
 
-        // Merge all pages (PDFs and images) into one combined PDF
+        // Merge all pages (PDFs and images) into one combined PDF.
+        // Passes ArrayBuffer directly to pdf-lib - avoids Uint8Array subclass/boxing issues
+        // that cause the "type 'NaN'" error we saw in some NW.js contexts.
+        // Returns { mode: "merged", bytes } OR { mode: "separate", files: [{bytes, ext}] }
+        // Scanners sometimes produce PDFs pdf-lib refuses to parse. When merging fails,
+        // we fall back to writing each page to its own numbered file.
         async function buildCombinedPdf() {
+            // Fast path: single PDF page - write bytes straight through, skip pdf-lib
+            if (pages.length === 1 && pages[0].mime === "application/pdf") {
+                const ab = await pages[0].blob.arrayBuffer();
+                return { mode: "merged", bytes: new Uint8Array(ab) };
+            }
+
+            try {
+                const bytes = await tryMergeWithPdfLib();
+                return { mode: "merged", bytes };
+            } catch (mergeErr) {
+                console.warn("[scantopdf] Merge failed, falling back to separate files:", mergeErr);
+                // Build per-page file bytes instead
+                const files = [];
+                for (let i = 0; i < pages.length; i++) {
+                    const p = pages[i];
+                    const ab = await p.blob.arrayBuffer();
+                    const bytes = new Uint8Array(ab);
+                    const ext = p.mime === "application/pdf" ? "pdf"
+                              : p.mime === "image/png" ? "png"
+                              : (p.mime === "image/jpeg" || p.mime === "image/jpg") ? "jpg"
+                              : "bin";
+                    files.push({ bytes, ext });
+                }
+                return { mode: "separate", files, reason: (mergeErr && mergeErr.message) || String(mergeErr) };
+            }
+        }
+
+        async function tryMergeWithPdfLib() {
+            const PDFDocument = getPDFDocument();
             const out = await PDFDocument.create();
             for (let i = 0; i < pages.length; i++) {
                 const p = pages[i];
                 try {
-                    // Read FRESH bytes from the blob every time - no cached Uint8Array corruption
-                    const bytes = await blobToFreshBytes(p.blob);
-                    if (!bytes || !(bytes instanceof Uint8Array) || bytes.length === 0) {
-                        throw new Error("Got empty or invalid bytes (length=" + (bytes && bytes.length) + ", ctor=" + (bytes && bytes.constructor && bytes.constructor.name) + ")");
+                    if (!p.blob || typeof p.blob.arrayBuffer !== "function") {
+                        throw new Error("Page has no valid blob");
                     }
+                    // Get the raw ArrayBuffer - pdf-lib accepts this natively
+                    const ab = await p.blob.arrayBuffer();
+                    if (!ab || ab.byteLength === 0) {
+                        throw new Error("Empty ArrayBuffer (byteLength=" + (ab && ab.byteLength) + ")");
+                    }
+                    // Also create a Uint8Array for methods that need it
+                    const bytes = new Uint8Array(ab);
 
                     if (p.mime === "application/pdf") {
-                        const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+                        // Sniff the first 5 bytes - a real PDF starts with "%PDF-"
+                        const head5 = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4]);
+                        const headHex = Array.from(bytes.slice(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+                        console.log("[scantopdf] Page " + (i + 1) + " first 5 chars:", JSON.stringify(head5), "hex:", headHex);
+
+                        let pdfBytes = bytes;
+                        let pdfAb = ab;
+                        if (head5 !== "%PDF-") {
+                            // Scanner gave us something that isn't a PDF - try to recover
+                            // Case 1: base64-encoded PDF (starts with "JVBER" which is base64 for "%PDF-")
+                            const asText = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 200)).trim();
+                            if (asText.startsWith("JVBER")) {
+                                const fullText = new TextDecoder("utf-8", { fatal: false }).decode(bytes).replace(/\s+/g, "");
+                                const decoded = atob(fullText);
+                                pdfBytes = new Uint8Array(decoded.length);
+                                for (let k = 0; k < decoded.length; k++) pdfBytes[k] = decoded.charCodeAt(k);
+                                pdfAb = pdfBytes.buffer;
+                                console.log("[scantopdf] Recovered base64-encoded PDF, decoded to", pdfBytes.length, "bytes");
+                            } else {
+                                // Case 2: PDF has junk prefix (scan for %PDF- anywhere in first 100KB)
+                                const scanLimit = Math.min(bytes.length, 100000);
+                                let pdfStart = -1;
+                                for (let k = 0; k < scanLimit - 4; k++) {
+                                    if (bytes[k] === 0x25 && bytes[k+1] === 0x50 && bytes[k+2] === 0x44 && bytes[k+3] === 0x46 && bytes[k+4] === 0x2D) {
+                                        pdfStart = k; break;
+                                    }
+                                }
+                                if (pdfStart > 0) {
+                                    pdfBytes = bytes.slice(pdfStart);
+                                    pdfAb = pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength);
+                                    console.log("[scantopdf] Stripped " + pdfStart + "-byte prefix, PDF starts at offset", pdfStart);
+                                } else {
+                                    throw new Error("Scanner returned non-PDF data. First 5 chars: " + JSON.stringify(head5) + ", hex: " + headHex + ". Check scanner output format - it may be returning HTML (error page) or an unsupported format. First 200 chars as text: " + asText.slice(0, 200));
+                                }
+                            }
+                        }
+
+                        const loadOpts = { ignoreEncryption: true, throwOnInvalidObject: false, updateMetadata: false };
+                        let src;
+                        try {
+                            src = await PDFDocument.load(pdfAb, loadOpts);
+                        } catch (e1) {
+                            try {
+                                src = await PDFDocument.load(pdfBytes, loadOpts);
+                            } catch (e2) {
+                                throw new Error("Can't merge this PDF with others - scanner returned a non-standard format pdf-lib can't parse. Remove this page and save it on its own (single PDFs are saved as-is), or rescan. pdf-lib said: " + (e2.message || e2));
+                            }
+                        }
                         const copiedPages = await out.copyPages(src, src.getPageIndices());
                         copiedPages.forEach((pg) => out.addPage(pg));
                     } else if (p.mime === "image/png") {
-                        const img = await out.embedPng(bytes);
+                        const img = await out.embedPng(ab);
                         const page = out.addPage([img.width, img.height]);
                         page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
                     } else if (p.mime === "image/jpeg" || p.mime === "image/jpg") {
-                        const img = await out.embedJpg(bytes);
+                        const img = await out.embedJpg(ab);
                         const page = out.addPage([img.width, img.height]);
                         page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
                     } else {
                         throw new Error(`Unsupported mime type "${p.mime}" on page ${i + 1}`);
                     }
                 } catch (e) {
-                    throw new Error(`Page ${i + 1} (${p.mime}): ${e.message || e}`);
+                    throw new Error(`Page ${i + 1} (${p.mime}, ${(p.blob && p.blob.size) || 0} bytes): ${e.message || e}`);
                 }
             }
             return await out.save();
@@ -677,17 +787,18 @@
                 const docType = document.getElementById("docTypeSelect").value || "other";
                 const notes = document.getElementById("notesInput").value || "";
 
-                // Combine all pages into one PDF
-                const combinedBytes = await buildCombinedPdf();
+                // Combine all pages (or fall back to separate files if merge fails)
+                const result = await buildCombinedPdf();
 
-                // Build filename: Company_Customer-doctype-date.pdf (company comes first so files sort by company)
+                // Build filename base: Company_Customer-doctype-date (company comes first so files sort by company)
                 const cleanSeg = (s) => s.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
                 const parts = [];
                 if (company) parts.push(cleanSeg(company));
                 if (customerName) parts.push(cleanSeg(customerName));
                 if (parts.length === 0) parts.push("scan");
                 const ts = new Date().toISOString().slice(0, 10);
-                const suggestedName = `${parts.join("-")}-${docType}-${ts}.pdf`;
+                const baseName = `${parts.join("-")}-${docType}-${ts}`;
+                const suggestedName = baseName + ".pdf";
 
                 global.apis.ui.hideProgressSpinner();
 
@@ -697,18 +808,14 @@
 
                 let savePath = null;
                 if (defaultFolder && (saveMode === "auto" || saveMode === "auto_confirm")) {
-                    // Build path - handle trailing slash
                     const sep = defaultFolder.endsWith("/") || defaultFolder.endsWith("\\") ? "" : "/";
                     savePath = defaultFolder + sep + suggestedName;
-
-                    // If auto_confirm, let them tweak the filename
                     if (saveMode === "auto_confirm") {
                         const confirmed = prompt("Save as:", savePath);
                         if (!confirmed) return;
                         savePath = confirmed;
                     }
                 } else {
-                    // Default: show save dialog
                     let dialogResult = global.apis.fs.openFileSaveDialog(suggestedName, ".pdf");
                     if (dialogResult && typeof dialogResult.then === "function") dialogResult = await dialogResult;
                     savePath = dialogResult;
@@ -716,24 +823,52 @@
                 }
 
                 global.apis.ui.showProgressSpinner("Saving...");
-                await global.apis.fs.writeFile(savePath, combinedBytes, "");
+
+                // Strip trailing .pdf from path to build per-page names when merge failed
+                const pathNoExt = savePath.replace(/\.pdf$/i, "");
+                const writtenPaths = [];
+
+                if (result.mode === "merged") {
+                    await global.apis.fs.writeFile(savePath, result.bytes, "");
+                    writtenPaths.push(savePath);
+                } else {
+                    // Separate-files fallback: write each page with -pageN suffix
+                    for (let i = 0; i < result.files.length; i++) {
+                        const f = result.files[i];
+                        const pageNum = String(i + 1).padStart(2, "0");
+                        const partPath = `${pathNoExt}-page${pageNum}.${f.ext}`;
+                        await global.apis.fs.writeFile(partPath, f.bytes, "");
+                        writtenPaths.push(partPath);
+                    }
+                }
 
                 const db = await global.apis.database.getConnection();
-                // Add company column if missing (idempotent)
                 try { await db.query("ALTER TABLE scantopdf_history ADD COLUMN company TEXT"); } catch { /* exists */ }
-                await db.query(
-                    "INSERT INTO scantopdf_history (customer_name, company, doc_type, page_count, file_path, notes) VALUES (?, ?, ?, ?, ?, ?)",
-                    [customerName || null, company || null, docType, pages.length, savePath, notes || null]
-                );
+                // Log one row per file so the History tab shows them all
+                for (const wp of writtenPaths) {
+                    await db.query(
+                        "INSERT INTO scantopdf_history (customer_name, company, doc_type, page_count, file_path, notes) VALUES (?, ?, ?, ?, ?, ?)",
+                        [customerName || null, company || null, docType, pages.length, wp, notes || null]
+                    );
+                }
 
                 global.apis.ui.hideProgressSpinner();
 
-                global.apis.f7.notification.create({
-                    icon: '<i class="icon fa-solid fa-check"></i>',
-                    title: `${pages.length}-page PDF Saved`,
-                    text: savePath,
-                    closeTimeout: 4000
-                }).open();
+                if (result.mode === "merged") {
+                    global.apis.f7.notification.create({
+                        icon: '<i class="icon fa-solid fa-check"></i>',
+                        title: `${pages.length}-page PDF Saved`,
+                        text: savePath,
+                        closeTimeout: 4000
+                    }).open();
+                } else {
+                    global.apis.alert(
+                        `Couldn't merge into one file - this scanner's PDFs aren't compatible with the merge library.\n\n` +
+                        `Saved as ${writtenPaths.length} separate files instead:\n` +
+                        writtenPaths.map((p) => "• " + p.split("/").pop()).join("\n"),
+                        "Saved as separate files"
+                    );
+                }
 
                 // Reset
                 pages.forEach((p) => { if (p.preview.startsWith("blob:")) URL.revokeObjectURL(p.preview); });
@@ -749,7 +884,7 @@
                 const details = [];
                 details.push("Error: " + (e.message || e));
                 if (e.stack) details.push("\n--- Stack ---\n" + String(e.stack).split("\n").slice(0, 5).join("\n"));
-                details.push("\n--- Plugin version: 1.7.0 ---");
+                details.push("\n--- Plugin version: 1.8.5 ---");
                 details.push("Pages in buffer: " + pages.length);
                 details.push("Page types: " + pages.map((p, i) => `#${i+1}=${p.mime}(${p.blob ? "has blob" : "NO BLOB"})`).join(", "));
                 console.error("[scantopdf] Save failed:", e);
