@@ -263,7 +263,7 @@
 
             `}
             <div class="block text-align-center text-color-gray" style="font-size: 0.8em; padding: 24px 0 8px;">
-                Scan to PDF · Built by admin01            </div>
+                Scan to PDF v1.7.0 · Built by admin01            </div>
         </div>
     </div>
 </template>
@@ -690,8 +690,30 @@
                 const suggestedName = `${parts.join("-")}-${docType}-${ts}.pdf`;
 
                 global.apis.ui.hideProgressSpinner();
-                const savePath = await global.apis.fs.openFileSaveDialog(suggestedName, ".pdf");
-                if (!savePath) return;
+
+                // Determine save path based on user's save mode setting
+                const saveMode = await plugin.getSetting(pluginID + ".auto_save_enabled") || "ask";
+                const defaultFolder = (await plugin.getSetting(pluginID + ".default_save_folder") || "").trim();
+
+                let savePath = null;
+                if (defaultFolder && (saveMode === "auto" || saveMode === "auto_confirm")) {
+                    // Build path - handle trailing slash
+                    const sep = defaultFolder.endsWith("/") || defaultFolder.endsWith("\\") ? "" : "/";
+                    savePath = defaultFolder + sep + suggestedName;
+
+                    // If auto_confirm, let them tweak the filename
+                    if (saveMode === "auto_confirm") {
+                        const confirmed = prompt("Save as:", savePath);
+                        if (!confirmed) return;
+                        savePath = confirmed;
+                    }
+                } else {
+                    // Default: show save dialog
+                    let dialogResult = global.apis.fs.openFileSaveDialog(suggestedName, ".pdf");
+                    if (dialogResult && typeof dialogResult.then === "function") dialogResult = await dialogResult;
+                    savePath = dialogResult;
+                    if (!savePath || typeof savePath !== "string") return;
+                }
 
                 global.apis.ui.showProgressSpinner("Saving...");
                 await global.apis.fs.writeFile(savePath, combinedBytes, "");
@@ -719,10 +741,19 @@
                 document.getElementById("customerNameInput").value = "";
                 document.getElementById("companyInput").value = "";
                 document.getElementById("notesInput").value = "";
+                loadHistory(); // Refresh history tab
                 $update();
             } catch (e) {
                 global.apis.ui.hideProgressSpinner();
-                global.apis.alert("Save failed: " + (e.message || e), "Error");
+                // Verbose error so we can diagnose - include stack if available
+                const details = [];
+                details.push("Error: " + (e.message || e));
+                if (e.stack) details.push("\n--- Stack ---\n" + String(e.stack).split("\n").slice(0, 5).join("\n"));
+                details.push("\n--- Plugin version: 1.7.0 ---");
+                details.push("Pages in buffer: " + pages.length);
+                details.push("Page types: " + pages.map((p, i) => `#${i+1}=${p.mime}(${p.blob ? "has blob" : "NO BLOB"})`).join(", "));
+                console.error("[scantopdf] Save failed:", e);
+                global.apis.alert(details.join("\n"), "Save failed");
             }
         }
 

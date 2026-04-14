@@ -94,5 +94,25 @@ exports.config = [
             ["Photo", "Photo"],
             ["Preview", "Preview (low-res)"]
         ]
+    },
+    {
+        type: "text",
+        key: pluginID + ".default_save_folder",
+        defaultVal: "",
+        label: "Default Save Folder",
+        placeholder: "Leave empty to pick each time (e.g. /home/user/Documents/Scans)",
+        text: "If set, PDFs save here automatically with the auto-generated filename - no save dialog. Leave empty to be prompted each time."
+    },
+    {
+        type: "select",
+        key: pluginID + ".auto_save_enabled",
+        defaultVal: "ask",
+        label: "Save Mode",
+        text: "When you click Save PDF, should it use the default folder automatically or always ask?",
+        options: [
+            ["ask", "Always show save dialog"],
+            ["auto", "Auto-save to default folder (skip dialog)"],
+            ["auto_confirm", "Auto-save to folder, but confirm filename first"]
+        ]
     }
 ];
